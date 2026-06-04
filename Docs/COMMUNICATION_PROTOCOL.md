@@ -40,6 +40,22 @@ source .venv/bin/activate
 python Tools/receive_snapshot.py /dev/ttyACM0 -b 115200 -o snapshot.png
 ```
 
+Then run ALPR on the saved host image:
+
+```bash
+python alpr_inference.py --input snapshot.png --pt best.pt --h5 emnist_ocr.h5 --output alpr_results
+```
+
+Or do both steps with one host command. The script waits for the next board
+snapshot, saves `snapshot.png`, and immediately runs detection on that file:
+
+```bash
+python Tools/host_snapshot_alpr.py /dev/ttyACM0 -b 115200 --snapshot snapshot.png --pt best.pt --h5 emnist_ocr.h5
+```
+
+Use `--count 0` to keep waiting for a new board snapshot after every USER1
+button press.
+
 ## Security And Robustness
 
 This protocol is not encrypted and does not authenticate the device. It does
