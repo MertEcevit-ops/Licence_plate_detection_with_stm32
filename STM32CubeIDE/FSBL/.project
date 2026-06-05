@@ -42,14 +42,34 @@
 			<locationURI>copy_PARENT/FSBL/Src/app_camera.c</locationURI>
 		</link>
 		<link>
+			<name>Application/User/app_crypto.c</name>
+			<type>1</type>
+			<locationURI>copy_PARENT/FSBL/Src/app_crypto.c</locationURI>
+		</link>
+		<link>
+			<name>Application/User/app_ltdc.c</name>
+			<type>1</type>
+			<locationURI>copy_PARENT/FSBL/Src/app_ltdc.c</locationURI>
+		</link>
+		<link>
 			<name>Application/User/app_memory.c</name>
 			<type>1</type>
 			<locationURI>copy_PARENT/FSBL/Src/app_memory.c</locationURI>
 		</link>
 		<link>
+			<name>Application/User/app_platform.c</name>
+			<type>1</type>
+			<locationURI>copy_PARENT/FSBL/Src/app_platform.c</locationURI>
+		</link>
+		<link>
 			<name>Application/User/app_resources.c</name>
 			<type>1</type>
 			<locationURI>copy_PARENT/FSBL/Src/app_resources.c</locationURI>
+		</link>
+		<link>
+			<name>Application/User/app_tasks.c</name>
+			<type>1</type>
+			<locationURI>copy_PARENT/FSBL/Src/app_tasks.c</locationURI>
 		</link>
 		<link>
 			<name>Application/User/app_transport_uart.c</name>

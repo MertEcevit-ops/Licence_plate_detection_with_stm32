@@ -11,6 +11,9 @@ extern "C" {
 #endif
 
 AppStatus_t AppCamera_Probe(uint32_t Resolution, uint32_t PixelFormat);
+AppStatus_t AppCamera_InitSensor(void);
+AppStatus_t AppCamera_InitDcmipp(void);
+DCMIPP_HandleTypeDef *AppCamera_GetDcmippHandle(void);
 AppStatus_t AppCamera_StartIspPreview(DCMIPP_HandleTypeDef *Dcmipp);
 AppStatus_t AppCamera_RunIspWarmup(uint32_t FrameCount);
 AppStatus_t AppCamera_StopPreview(DCMIPP_HandleTypeDef *Dcmipp);

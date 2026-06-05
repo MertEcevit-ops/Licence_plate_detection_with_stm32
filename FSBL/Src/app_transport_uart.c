@@ -1,4 +1,5 @@
 #include "app_transport_uart.h"
+#include "app_crypto.h"
 #include "app_memory.h"
 #include "app_resources.h"
 #include "snapshot_protocol.h"
@@ -7,6 +8,7 @@
 #include "FreeRTOS.h"
 
 static uint32_t UartFrameId = 1U;
+static uint8_t UartTxBuffer[APP_UART_TX_CHUNK_SIZE];
 
 AppStatus_t AppUartTransport_SendSnapshot(uint32_t FrameBufferAddress,
                                           uint32_t Width,
@@ -14,6 +16,7 @@ AppStatus_t AppUartTransport_SendSnapshot(uint32_t FrameBufferAddress,
                                           uint32_t Decimation)
 {
   uint8_t header[SNAPSHOT_PROTOCOL_HEADER_SIZE];
+  AppCrypto_Aes128CtrContext_t crypto_context;
   SnapshotProtocol_FrameInfo_t info;
   uint8_t *frame = (uint8_t *)FrameBufferAddress;
   uint32_t payload_size;
@@ -48,7 +51,7 @@ AppStatus_t AppUartTransport_SendSnapshot(uint32_t FrameBufferAddress,
     info.BytesPerPixel = 2U;
     info.Decimation = (uint16_t)Decimation;
     info.PixelFormat = SNAPSHOT_PROTOCOL_PIXEL_FORMAT_RGB565;
-    info.Flags = SNAPSHOT_PROTOCOL_FLAG_CRC32;
+    info.Flags = SNAPSHOT_PROTOCOL_FLAG_CRC32 | SNAPSHOT_PROTOCOL_FLAG_AES128_CTR;
     info.PayloadSize = payload_size;
     info.FrameId = UartFrameId++;
     info.PayloadCrc32 = SnapshotProtocol_Crc32(frame, payload_size);
@@ -57,6 +60,13 @@ AppStatus_t AppUartTransport_SendSnapshot(uint32_t FrameBufferAddress,
   }
 
   AppResources_Unlock(APP_RESOURCE_FRAMEBUFFER);
+  if (status != APP_STATUS_OK)
+  {
+    AppResources_Unlock(APP_RESOURCE_UART);
+    return status;
+  }
+
+  status = AppCrypto_Aes128CtrStartFrame(&crypto_context, info.FrameId);
   if (status != APP_STATUS_OK)
   {
     AppResources_Unlock(APP_RESOURCE_UART);
@@ -76,7 +86,14 @@ AppStatus_t AppUartTransport_SendSnapshot(uint32_t FrameBufferAddress,
                        (uint16_t)APP_UART_TX_CHUNK_SIZE :
                        (uint16_t)remaining;
 
-    if (HAL_UART_Transmit(&hcom_uart[COM1], frame, tx_size, HAL_MAX_DELAY) != HAL_OK)
+    status = AppCrypto_Aes128CtrCrypt(&crypto_context, frame, UartTxBuffer, tx_size);
+    if (status != APP_STATUS_OK)
+    {
+      AppResources_Unlock(APP_RESOURCE_UART);
+      return status;
+    }
+
+    if (HAL_UART_Transmit(&hcom_uart[COM1], UartTxBuffer, tx_size, HAL_MAX_DELAY) != HAL_OK)
     {
       AppResources_Unlock(APP_RESOURCE_UART);
       return APP_STATUS_ERROR;

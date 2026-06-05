@@ -5,18 +5,95 @@
 #include "isp_api.h"
 #include "imx335_E27_isp_param_conf.h"
 #include "task.h"
+#include <math.h>
 
 static volatile uint32_t MainFrameCounter;
+static DCMIPP_HandleTypeDef DcmippHandle;
 static IMX335_Object_t IMX335Obj;
 static ISP_HandleTypeDef CameraIsp;
 static int32_t IspGain;
 static int32_t IspExposure;
+
+#define DIV_FACTOR(SRC, DST) (((uint32_t)((1024 * DST) / SRC)) > 1023 ? 1023 : ((uint32_t)((1024 * DST) / SRC)))
+#define DOWNSCALE_RATIO(SRC, DST) (((uint32_t)(((float_t)(SRC) / (float_t)(DST)) * 8192) < 8192) ? 8192 : \
+                                   ((((uint32_t)(((float_t)(SRC) / (float_t)(DST)) * 8192)) > 65535) ? 65535 : \
+                                   ((uint32_t)(((float_t)(SRC) / (float_t)(DST)) * 8192))))
 
 static ISP_StatusTypeDef GetSensorInfoHelper(uint32_t Instance, ISP_SensorInfoTypeDef *SensorInfo);
 static ISP_StatusTypeDef SetSensorGainHelper(uint32_t Instance, int32_t Gain);
 static ISP_StatusTypeDef GetSensorGainHelper(uint32_t Instance, int32_t *Gain);
 static ISP_StatusTypeDef SetSensorExposureHelper(uint32_t Instance, int32_t Exposure);
 static ISP_StatusTypeDef GetSensorExposureHelper(uint32_t Instance, int32_t *Exposure);
+
+DCMIPP_HandleTypeDef *AppCamera_GetDcmippHandle(void)
+{
+  return &DcmippHandle;
+}
+
+AppStatus_t AppCamera_InitDcmipp(void)
+{
+  DCMIPP_PipeConfTypeDef pPipeConf = {0};
+  DCMIPP_CSI_PIPE_ConfTypeDef pCSIPipeConf = {0};
+  DCMIPP_CSI_ConfTypeDef csiconf = {0};
+  DCMIPP_DownsizeTypeDef DonwsizeConf = {0};
+
+  DcmippHandle.Instance = DCMIPP;
+  if (HAL_DCMIPP_Init(&DcmippHandle) != HAL_OK)
+  {
+    return APP_STATUS_ERROR;
+  }
+
+  csiconf.DataLaneMapping = DCMIPP_CSI_PHYSICAL_DATA_LANES;
+  csiconf.NumberOfLanes = DCMIPP_CSI_TWO_DATA_LANES;
+  csiconf.PHYBitrate = DCMIPP_CSI_PHY_BT_1600;
+  if (HAL_DCMIPP_CSI_SetConfig(&DcmippHandle, &csiconf) != HAL_OK)
+  {
+    return APP_STATUS_ERROR;
+  }
+
+  if (HAL_DCMIPP_CSI_SetVCConfig(&DcmippHandle, DCMIPP_VIRTUAL_CHANNEL0,
+                                 DCMIPP_CSI_DT_BPP10) != HAL_OK)
+  {
+    return APP_STATUS_ERROR;
+  }
+
+  pCSIPipeConf.DataTypeMode = DCMIPP_DTMODE_DTIDA;
+  pCSIPipeConf.DataTypeIDA = DCMIPP_DT_RAW10;
+  pCSIPipeConf.DataTypeIDB = DCMIPP_DT_RAW10;
+
+  if (HAL_DCMIPP_CSI_PIPE_SetConfig(&DcmippHandle, DCMIPP_PIPE1, &pCSIPipeConf) != HAL_OK)
+  {
+    return APP_STATUS_ERROR;
+  }
+
+  pPipeConf.FrameRate = DCMIPP_FRAME_RATE_ALL;
+  pPipeConf.PixelPackerFormat = DCMIPP_PIXEL_PACKER_FORMAT_RGB565_1;
+  pPipeConf.PixelPipePitch = 1600;
+
+  if (HAL_DCMIPP_PIPE_SetConfig(&DcmippHandle, DCMIPP_PIPE1, &pPipeConf) != HAL_OK)
+  {
+    return APP_STATUS_ERROR;
+  }
+
+  DonwsizeConf.HSize = 800;
+  DonwsizeConf.VSize = 480;
+  DonwsizeConf.HRatio = DOWNSCALE_RATIO(IMX335_WIDTH, DonwsizeConf.HSize);
+  DonwsizeConf.VRatio = DOWNSCALE_RATIO(IMX335_HEIGHT, DonwsizeConf.VSize);
+  DonwsizeConf.HDivFactor = DIV_FACTOR(IMX335_WIDTH, DonwsizeConf.HSize);
+  DonwsizeConf.VDivFactor = DIV_FACTOR(IMX335_HEIGHT, DonwsizeConf.VSize);
+
+  if (HAL_DCMIPP_PIPE_SetDownsizeConfig(&DcmippHandle, DCMIPP_PIPE1, &DonwsizeConf) != HAL_OK)
+  {
+    return APP_STATUS_ERROR;
+  }
+
+  if (HAL_DCMIPP_PIPE_EnableDownsize(&DcmippHandle, DCMIPP_PIPE1) != HAL_OK)
+  {
+    return APP_STATUS_ERROR;
+  }
+
+  return APP_STATUS_OK;
+}
 
 AppStatus_t AppCamera_Probe(uint32_t Resolution, uint32_t PixelFormat)
 {
@@ -56,6 +133,11 @@ AppStatus_t AppCamera_Probe(uint32_t Resolution, uint32_t PixelFormat)
   }
 
   return APP_STATUS_OK;
+}
+
+AppStatus_t AppCamera_InitSensor(void)
+{
+  return AppCamera_Probe(IMX335_R2592_1944, IMX335_RAW_RGGB10);
 }
 
 AppStatus_t AppCamera_StartIspPreview(DCMIPP_HandleTypeDef *Dcmipp)
@@ -290,6 +372,16 @@ void AppCamera_OnPipeVsyncEvent(DCMIPP_HandleTypeDef *Dcmipp, uint32_t Pipe)
     default:
       break;
   }
+}
+
+void HAL_DCMIPP_PIPE_FrameEventCallback(DCMIPP_HandleTypeDef *hdcmipp, uint32_t Pipe)
+{
+  AppCamera_OnPipeFrameEvent(hdcmipp, Pipe);
+}
+
+void HAL_DCMIPP_PIPE_VsyncEventCallback(DCMIPP_HandleTypeDef *hdcmipp, uint32_t Pipe)
+{
+  AppCamera_OnPipeVsyncEvent(hdcmipp, Pipe);
 }
 
 static ISP_StatusTypeDef GetSensorInfoHelper(uint32_t Instance, ISP_SensorInfoTypeDef *SensorInfo)
