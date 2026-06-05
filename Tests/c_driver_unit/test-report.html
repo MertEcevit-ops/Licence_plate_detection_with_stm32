@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>C Driver Unit Test Report</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #5d6975;
+      --line: #d8dee6;
+      --panel: #f7f9fb;
+      --pass: #138a43;
+      --pass-bg: #dff5e8;
+      --fail: #b42318;
+      --fail-bg: #fde3df;
+      --accent: #2563eb;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: #ffffff;
+    }
+    main {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 32px 20px 44px;
+    }
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 18px;
+      margin-bottom: 22px;
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 28px;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 28px 0 12px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 18px 0;
+    }
+    .metric {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      padding: 14px;
+      border-radius: 8px;
+    }
+    .metric strong {
+      display: block;
+      font-size: 24px;
+      margin-top: 4px;
+    }
+    .label {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .status {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-weight: 700;
+      font-size: 13px;
+    }
+    .status.passed {
+      color: var(--pass);
+      background: var(--pass-bg);
+    }
+    .status.failed {
+      color: var(--fail);
+      background: var(--fail-bg);
+    }
+    .bar {
+      width: 100%;
+      height: 18px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #eef2f6;
+      overflow: hidden;
+    }
+    .fill {
+      width: 100.00%;
+      height: 100%;
+      background: var(--pass);
+    }
+    ul {
+      margin: 0;
+      padding-left: 22px;
+    }
+    li {
+      margin: 6px 0;
+    }
+    pre {
+      white-space: pre-wrap;
+      overflow: auto;
+      border: 1px solid var(--line);
+      background: #111827;
+      color: #f9fafb;
+      border-radius: 8px;
+      padding: 16px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    @media (max-width: 720px) {
+      .summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>C Driver Unit Test Report</h1>
+      <div class="meta">Generated at 2026-06-05 20:55:40</div>
+    </header>
+
+    <section class="summary" aria-label="Test summary">
+      <div class="metric"><span class="label">Status</span><strong><span class="status passed">PASSED</span></strong></div>
+      <div class="metric"><span class="label">Pass Rate</span><strong>100.0%</strong></div>
+      <div class="metric"><span class="label">Passed</span><strong>12/12</strong></div>
+      <div class="metric"><span class="label">Failed</span><strong>0</strong></div>
+    </section>
+
+    <div class="bar" aria-label="Pass percentage">
+      <div class="fill"></div>
+    </div>
+
+    <h2>Passed Tests</h2>
+    <ul><li>snapshot header builds valid SNAP v2 frame</li>
+<li>snapshot header rejects invalid inputs</li>
+<li>memory payload size and framebuffer bounds</li>
+<li>memory d-cache invalidation aligns address range</li>
+<li>crypto rejects invalid inputs</li>
+<li>crypto matches AES-CTR known vector</li>
+<li>crypto chunking matches one-shot output</li>
+<li>uart transport rejects invalid frame</li>
+<li>uart transport sends encrypted snapshot</li>
+<li>uart transport chunks large payload</li>
+<li>uart transport returns resource failure</li>
+<li>uart transport returns HAL failure</li></ul>
+
+    <h2>Failures</h2>
+    <ul><li>No failure lines found.</li></ul>
+
+    <h2>Raw Output</h2>
+    <pre>[PASS] snapshot header builds valid SNAP v2 frame
+[PASS] snapshot header rejects invalid inputs
+[PASS] memory payload size and framebuffer bounds
+[PASS] memory d-cache invalidation aligns address range
+[PASS] crypto rejects invalid inputs
+[PASS] crypto matches AES-CTR known vector
+[PASS] crypto chunking matches one-shot output
+[PASS] uart transport rejects invalid frame
+[PASS] uart transport sends encrypted snapshot
+[PASS] uart transport chunks large payload
+[PASS] uart transport returns resource failure
+[PASS] uart transport returns HAL failure
+
+12/12 C driver unit tests passed
+</pre>
+  </main>
+</body>
+</html>

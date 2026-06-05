@@ -7,6 +7,13 @@
 #include "stm32n6570_discovery.h"
 #include "FreeRTOS.h"
 
+#if defined(APP_UART_TRANSPORT_FRAME_POINTER)
+uint8_t *APP_UART_TRANSPORT_FRAME_POINTER(uint32_t Address);
+#define APP_UART_TRANSPORT_FRAME_PTR(Address) APP_UART_TRANSPORT_FRAME_POINTER(Address)
+#else
+#define APP_UART_TRANSPORT_FRAME_PTR(Address) ((uint8_t *)(uintptr_t)(Address))
+#endif
+
 static uint32_t UartFrameId = 1U;
 static uint8_t UartTxBuffer[APP_UART_TX_CHUNK_SIZE];
 
@@ -18,7 +25,7 @@ AppStatus_t AppUartTransport_SendSnapshot(uint32_t FrameBufferAddress,
   uint8_t header[SNAPSHOT_PROTOCOL_HEADER_SIZE];
   AppCrypto_Aes128CtrContext_t crypto_context;
   SnapshotProtocol_FrameInfo_t info;
-  uint8_t *frame = (uint8_t *)FrameBufferAddress;
+  uint8_t *frame = APP_UART_TRANSPORT_FRAME_PTR(FrameBufferAddress);
   uint32_t payload_size;
   uint32_t remaining;
   AppStatus_t status;

@@ -17,8 +17,8 @@ The implementation is now split into modules:
 | `app_camera` | IMX335 probe, ISP helpers, preview warmup, snapshot capture and DCMIPP callbacks |
 | `app_resources` | FreeRTOS mutexes for camera, UART and framebuffer ownership |
 | `app_memory` | RGB565 size calculation, framebuffer bounds checks and D-cache invalidation |
-| `snapshot_protocol` | v2 UART header generation and CRC32 |
-| `app_transport_uart` | UART chunking, payload CRC and serialized transmission |
+| `snapshot_protocol` | v2 UART header generation |
+| `app_transport_uart` | UART chunking, AES-CTR payload encryption and serialized transmission |
 | `Tools/snapshot_protocol.py` | Host-side protocol parser and validation |
 | `Tools/receive_snapshot.py` | Host CLI that receives and saves the image |
 
@@ -31,4 +31,6 @@ Run host-side tests with:
 ```bash
 source .venv/bin/activate
 python -m unittest Tools/test_snapshot_protocol.py
+make -C Tests/c_driver_unit test
+make -C Tests/c_driver_unit report
 ```

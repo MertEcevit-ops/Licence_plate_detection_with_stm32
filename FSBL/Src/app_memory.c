@@ -49,7 +49,7 @@ AppStatus_t AppMemory_InvalidateDCache(uint32_t Address, uint32_t Size)
   aligned_end = (Address + Size + APP_MEMORY_CACHE_LINE_SIZE - 1U) &
                 ~(APP_MEMORY_CACHE_LINE_SIZE - 1U);
 
-  SCB_InvalidateDCache_by_Addr((uint32_t *)aligned_addr,
+  SCB_InvalidateDCache_by_Addr((uint32_t *)(uintptr_t)aligned_addr,
                                (int32_t)(aligned_end - aligned_addr));
   return APP_STATUS_OK;
 }

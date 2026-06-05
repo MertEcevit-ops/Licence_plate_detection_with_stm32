@@ -1,0 +1,14 @@
+[PASS] snapshot header builds valid SNAP v2 frame
+[PASS] snapshot header rejects invalid inputs
+[PASS] memory payload size and framebuffer bounds
+[PASS] memory d-cache invalidation aligns address range
+[PASS] crypto rejects invalid inputs
+[PASS] crypto matches AES-CTR known vector
+[PASS] crypto chunking matches one-shot output
+[PASS] uart transport rejects invalid frame
+[PASS] uart transport sends encrypted snapshot
+[PASS] uart transport chunks large payload
+[PASS] uart transport returns resource failure
+[PASS] uart transport returns HAL failure
+
+12/12 C driver unit tests passed
