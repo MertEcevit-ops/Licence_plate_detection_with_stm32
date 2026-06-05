@@ -380,16 +380,17 @@ buffer footprint.
 
 \section{Host-Side ALPR Pipeline}
 The repository also includes a host-side ALPR pipeline in
-\texttt{alpr\_inference.py}. It loads a YOLO \texttt{.pt} detector, applies a
-confidence threshold, crops detected plate regions, uses EasyOCR for text
-recognition, and normalizes the output with a Turkish licence plate regular
-expression. This host pipeline can process saved snapshots or other input
-images while the embedded implementation continues to provide the camera
-capture and secure transfer path.
+\texttt{alpr\_inference.py}. It receives AES-protected SNAP frames over UART,
+decrypts the RGB565 payload with the shared host protocol helper, converts the
+frame to OpenCV format, loads a YOLO \texttt{.pt} detector, applies a confidence
+threshold, crops detected plate regions, uses EasyOCR for text recognition, and
+normalizes the output with a Turkish licence plate regular expression. The
+separate \texttt{Tools/receive\_snapshot.py} helper remains available when only
+a decrypted image file is needed.
 
-\begin{lstlisting}[caption={Typical host commands for receiving a snapshot and running ALPR inference.}]
+\begin{lstlisting}[caption={Typical host commands for live ALPR inference or one-shot snapshot saving.}]
+python alpr_inference.py --port /dev/ttyACM0 -b 115200 --pt yolov8_plaka.pt --conf 0.25
 python Tools/receive_snapshot.py /dev/ttyACM0 -b 115200 -o snapshot.png
-python alpr_inference.py --input snapshot.png --pt yolov8_plaka.pt --conf 0.25
 \end{lstlisting}
 
 \section{Verification and Results}
@@ -445,7 +446,6 @@ Yusuf Tekin & YOLO detector training/inference workflow, host-side ALPR pipeline
   \item Add message authentication, for example HMAC, if the UART link is treated as adversarial rather than only private.
   \item Replace the fixed AES key with a provisioning or session-key mechanism.
   \item Raise UART throughput or add a faster transport if continuous video-like operation is required.
-  \item Update the standalone protocol documentation so it matches the current AES-128-CTR frame format.
 \end{itemize}
 
 \section{Conclusion}

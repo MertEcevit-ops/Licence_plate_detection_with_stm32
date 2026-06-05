@@ -1,56 +1,86 @@
 #!/usr/bin/env python3
-"""Run the ALPR pipeline with a YOLO .pt detector and EasyOCR Engine.
-Local usage with popup windows:
-    python3 alpr_inference.py --input alpr/images --sample 5 --show
+"""Live STM32 ALPR pipeline for AES-encrypted SNAP frames.
+
+The board sends RGB565 frames over UART using the SNAP v2 protocol. The payload
+is AES-128-CTR encrypted when the firmware sets the AES flag; this script
+decrypts it, converts it to OpenCV BGR, then runs YOLO + EasyOCR live.
 """
 
 from __future__ import annotations
+
 import argparse
 import os
-import random
 import re
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp"}
+try:
+    import cv2
+    import numpy as np
+except ImportError:
+    cv2 = None
+    np = None
+
+
+TOOLS_DIR = Path(__file__).resolve().parent / "Tools"
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+from snapshot_protocol import (  # noqa: E402
+    FLAG_AES128_CTR,
+    HEADER_SIZE,
+    MAGIC,
+    decrypt_payload,
+    parse_header,
+    rgb565_to_rgb888,
+    validate_payload,
+)
+
+
+WINDOW_NAME = "ALPR Analiz Paneli"
+TURKISH_PLATE_LETTERS = "ABCDEFGHIJKLMNOPRSTUVYZ"
+TURKISH_PLATE_RE = re.compile(
+    rf"(0[1-9]|[1-7][0-9]|8[01])([{TURKISH_PLATE_LETTERS}]{{1,3}})([0-9]{{2,4}})"
+)
+
+
+@dataclass
+class LiveDetection:
+    box: tuple[int, int, int, int]
+    confidence: float
+    text: str
+    raw_text: str
+    valid_plate: bool
+    plate_image: "np.ndarray"
+    debug_plate: "np.ndarray"
+
 
 def setup_runtime_environment(cache_dir: Path) -> None:
     cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ["MPLCONFIGDIR"] = str(cache_dir / "matplotlib")
     os.environ["YOLO_CONFIG_DIR"] = str(cache_dir / "ultralytics")
 
-@dataclass
-class CharacterPrediction:
-    box: tuple[int, int, int, int]
-    label: str
-    confidence: float
 
-@dataclass
-class PlatePrediction:
-    box: tuple[int, int, int, int]
-    confidence: float
-    text: str
-    raw_text: str
-    valid_plate: bool
-    characters: list[CharacterPrediction]
-    image_outputs: dict[str, Path]
-
-def require_runtime_imports():
+def require_runtime_imports() -> None:
     missing = []
-    try:
-        import cv2  # noqa: F401
-    except ImportError:
+
+    if cv2 is None:
         missing.append("opencv-python")
-    try:
-        import numpy  # noqa: F401
-    except ImportError:
+    if np is None:
         missing.append("numpy")
+
+    try:
+        import serial  # noqa: F401
+    except ImportError:
+        missing.append("pyserial")
+
     try:
         from ultralytics import YOLO  # noqa: F401
     except ImportError:
         missing.append("ultralytics")
+
     try:
         import easyocr  # noqa: F401
     except ImportError:
@@ -58,101 +88,161 @@ def require_runtime_imports():
 
     if missing:
         raise RuntimeError(
-            "Eksik Python paketleri: " + ", ".join(missing) + 
-            ". Kurulum: pip install " + " ".join(missing)
+            "Eksik Python paketleri: "
+            + ", ".join(missing)
+            + ". Kurulum: pip install "
+            + " ".join(missing)
         )
 
-def iter_images(path: Path) -> list[Path]:
-    if path.is_file():
-        if path.suffix.lower() not in IMAGE_SUFFIXES:
-            raise ValueError(f"Desteklenmeyen input uzantisi: {path}")
-        return [path]
-    if not path.is_dir():
-        raise FileNotFoundError(path)
-    return sorted(p for p in path.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
+
+def normalize_turkish_plate(raw_text: str) -> tuple[str, bool]:
+    clean = re.sub(r"[^0-9A-Z]", "", raw_text.upper())
+    if clean.startswith("TR") and len(clean) > 2 and clean[2].isdigit():
+        clean = clean[2:]
+
+    match = TURKISH_PLATE_RE.search(clean)
+    if match:
+        return match.group(0), True
+    return clean, False
 
 
-# --- DASHBOARD YARDIMCI FONKSİYONLARI ---
-def fit_image(img, max_w, max_h):
-    import cv2
+def fit_image(img: "np.ndarray", max_w: int, max_h: int) -> "np.ndarray":
+    if img is None or img.size == 0:
+        return np.zeros((max_h, max_w, 3), dtype=np.uint8)
+
     h, w = img.shape[:2]
+    if h <= 0 or w <= 0:
+        return np.zeros((max_h, max_w, 3), dtype=np.uint8)
+
     scale = min(max_w / w, max_h / h)
-    if scale > 1.5: scale = 1.5 
-    return cv2.resize(img, (int(w * scale), int(h * scale)))
+    if scale > 1.5:
+        scale = 1.5
 
-def build_dashboard(annot, pl, dbg_pl, final_text, is_valid):
-    import cv2
-    import numpy as np
-    
-    # 1200x700 boyutunda koyu gri arka plan
-    ch, cw = 700, 1200
-    canvas = np.full((ch, cw, 3), 40, dtype=np.uint8)
+    new_w = max(1, int(w * scale))
+    new_h = max(1, int(h * scale))
+    return cv2.resize(img, (new_w, new_h))
 
-    # 1. Sol Panel: Tam Araç Görseli
-    annot_fit = fit_image(annot, 760, 660)
-    h_a, w_a = annot_fit.shape[:2]
-    y_offset_a = (ch - h_a) // 2
-    x_offset_a = 20
-    canvas[y_offset_a:y_offset_a+h_a, x_offset_a:x_offset_a+w_a] = annot_fit
 
-    # Sağ Taraf X Ekseni Başlangıcı
+def put_text_fit(
+    canvas: "np.ndarray",
+    text: str,
+    origin: tuple[int, int],
+    max_width: int,
+    color: tuple[int, int, int],
+    initial_scale: float = 1.4,
+    min_scale: float = 0.55,
+    thickness: int = 3,
+) -> None:
+    font_scale = initial_scale
+    while font_scale > min_scale:
+        (text_w, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+        if text_w <= max_width:
+            break
+        font_scale -= 0.1
+
+    cv2.putText(
+        canvas,
+        text,
+        origin,
+        cv2.FONT_HERSHEY_SIMPLEX,
+        max(font_scale, min_scale),
+        color,
+        thickness,
+    )
+
+
+def build_dashboard(
+    annotated: "np.ndarray",
+    plate: "np.ndarray",
+    debug_plate: "np.ndarray",
+    final_text: str,
+    is_valid: bool,
+) -> "np.ndarray":
+    canvas_h, canvas_w = 700, 1200
+    canvas = np.full((canvas_h, canvas_w, 3), 40, dtype=np.uint8)
+
+    annotated_fit = fit_image(annotated, 760, 660)
+    h_annot, w_annot = annotated_fit.shape[:2]
+    y_annot = (canvas_h - h_annot) // 2
+    canvas[y_annot : y_annot + h_annot, 20 : 20 + w_annot] = annotated_fit
+
     x_right = 800
+    plate_fit = fit_image(plate, 360, 200)
+    cv2.putText(
+        canvas,
+        "1. YOLO Plaka Tespiti",
+        (x_right, 50),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (200, 255, 200),
+        2,
+    )
+    canvas[70 : 70 + plate_fit.shape[0], x_right : x_right + plate_fit.shape[1]] = plate_fit
 
-    # 2. Sağ Panel - Adım 1: YOLO Kırpması
-    pl_fit = fit_image(pl, 360, 200)
-    cv2.putText(canvas, "1. YOLO Plaka Tespiti", (x_right, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 255, 200), 2)
-    canvas[70:70+pl_fit.shape[0], x_right:x_right+pl_fit.shape[1]] = pl_fit
+    debug_fit = fit_image(debug_plate, 360, 200)
+    y_debug = 70 + plate_fit.shape[0] + 50
+    cv2.putText(
+        canvas,
+        "2. EasyOCR Analizi",
+        (x_right, y_debug - 20),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (200, 255, 200),
+        2,
+    )
+    canvas[y_debug : y_debug + debug_fit.shape[0], x_right : x_right + debug_fit.shape[1]] = debug_fit
 
-    # 3. Sağ Panel - Adım 2: EasyOCR
-    dbg_fit = fit_image(dbg_pl, 360, 200)
-    y_dbg = 70 + pl_fit.shape[0] + 50
-    cv2.putText(canvas, "2. EasyOCR Analizi", (x_right, y_dbg - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 255, 200), 2)
-    canvas[y_dbg:y_dbg+dbg_fit.shape[0], x_right:x_right+dbg_fit.shape[1]] = dbg_fit
+    y_final = y_debug + debug_fit.shape[0] + 50
+    cv2.putText(
+        canvas,
+        "3. Nihai Okunan Plaka",
+        (x_right, y_final - 20),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (200, 255, 200),
+        2,
+    )
 
-    # 4. Sağ Panel - Adım 3: NİHAİ DÜZ METİN (YENİ EKLENEN KISIM)
-    y_final = y_dbg + dbg_fit.shape[0] + 50
-    cv2.putText(canvas, "3. Nihai Okunan Plaka", (x_right, y_final - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 255, 200), 2)
-    
-    # Plaka formata uygunsa yeşil, uyduruksa/boşsa kırmızı kutu yazısı
     text_color = (0, 255, 0) if is_valid else (0, 0, 255)
     display_text = final_text if final_text else "OKUNAMADI"
-    
-    # Şık bir kutu çizelim
     cv2.rectangle(canvas, (x_right, y_final), (x_right + 360, y_final + 60), (60, 60, 60), -1)
-    # Metni ortalayarak veya hizalayarak yaz
-    cv2.putText(canvas, display_text, (x_right + 20, y_final + 45), cv2.FONT_HERSHEY_SIMPLEX, 1.4, text_color, 3)
+    put_text_fit(canvas, display_text, (x_right + 18, y_final + 45), 325, text_color)
 
-    cv2.putText(canvas, "Sonraki resim icin bir tusa basin...", (x_right, 670), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
-
+    cv2.putText(
+        canvas,
+        "STM32'den yeni AES frame bekleniyor...",
+        (x_right, 670),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (150, 150, 255),
+        1,
+    )
     return canvas
 
 
-class ALPRPipeline:
+class LiveALPRPipeline:
     def __init__(self, yolo_model_path: Path, detector_confidence: float) -> None:
-        require_runtime_imports()
         from ultralytics import YOLO
         import easyocr
 
         if not yolo_model_path.exists():
             raise FileNotFoundError(yolo_model_path)
 
-        print("--- Modeller Yukleniyor (Lokal CPU Modu) ---")
+        print("--- AI modelleri yukleniyor ---")
         self.yolo_model = YOLO(str(yolo_model_path))
-        self.ocr_reader = easyocr.Reader(['en'], gpu=False)
+        self.ocr_reader = easyocr.Reader(["en"], gpu=False)
         self.detector_confidence = detector_confidence
 
-    def process_image(self, image_path: Path, output_dir: Path | None, show: bool) -> list[PlatePrediction]:
-        import cv2
+    def show_idle(self) -> None:
+        dummy_frame = np.zeros((240, 400, 3), dtype=np.uint8)
+        empty_plate = np.zeros((100, 200, 3), dtype=np.uint8)
+        cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+        cv2.imshow(WINDOW_NAME, build_dashboard(dummy_frame, empty_plate, empty_plate, "", False))
+        cv2.waitKey(1)
 
-        if output_dir is not None:
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-        frame = cv2.imread(str(image_path))
-        if frame is None:
-            raise ValueError(f"Goruntu okunamadi: {image_path}")
-
+    def process_frame(self, frame: "np.ndarray") -> str | None:
         annotated = frame.copy()
-        predictions: list[PlatePrediction] = []
+        detections: list[LiveDetection] = []
 
         results = self.yolo_model(frame, conf=self.detector_confidence, verbose=False)
         for result in results:
@@ -165,80 +255,79 @@ class ALPRPipeline:
 
                 plate = frame[y1:y2, x1:x2]
                 confidence = float(box.conf[0]) if box.conf is not None else 0.0
-                
-                characters, debug_plate, raw_ocr_text = self._read_plate_text_with_boxes(plate)
-                
-                # --- AKILLI FİLTRE BURADA DEVREYE GİRİYOR ---
+                debug_plate, raw_ocr_text = self._read_plate(plate)
                 text, valid_plate = normalize_turkish_plate(raw_ocr_text)
                 final_display_text = text if valid_plate else raw_ocr_text
-                image_outputs: dict[str, Path] = {}
 
-                predictions.append(
-                    PlatePrediction(
+                detections.append(
+                    LiveDetection(
                         box=(x1, y1, x2, y2),
                         confidence=confidence,
-                        text=text,
+                        text=final_display_text,
                         raw_text=raw_ocr_text,
                         valid_plate=valid_plate,
-                        characters=characters,
-                        image_outputs=image_outputs,
+                        plate_image=plate,
+                        debug_plate=debug_plate,
                     )
                 )
-                prediction = predictions[-1]
 
                 main_text_y = y1 - 12
-                if main_text_y < 30: 
-                    main_text_y = y2 + 35 
+                if main_text_y < 30:
+                    main_text_y = y2 + 35
 
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0) if valid_plate else (0,165,255), 3)
+                color = (0, 255, 0) if valid_plate else (0, 165, 255)
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
                 cv2.putText(
                     annotated,
                     final_display_text if final_display_text else "PLAKA",
                     (x1, main_text_y),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     1.2,
-                    (0, 255, 0) if valid_plate else (0,165,255),
+                    color,
                     3,
                 )
 
-                if show:
-                    # Dashboard'a final_display_text ve valid_plate durumunu gönderiyoruz
-                    dashboard = build_dashboard(annotated, plate, debug_plate, final_display_text, valid_plate)
-                    cv2.imshow("ALPR Analiz Paneli", dashboard)
-                    cv2.waitKey(0)
+        if detections:
+            best = max(detections, key=lambda item: (item.valid_plate, item.confidence))
+            dashboard = build_dashboard(
+                annotated,
+                best.plate_image,
+                best.debug_plate,
+                best.text,
+                best.valid_plate,
+            )
+            best_plate = best.text
+        else:
+            empty_plate = np.zeros((100, 200, 3), dtype=np.uint8)
+            dashboard = build_dashboard(annotated, empty_plate, empty_plate, "", False)
+            best_plate = None
 
-        return predictions
+        cv2.imshow(WINDOW_NAME, dashboard)
+        cv2.waitKey(1)
+        return best_plate
 
-    def _read_plate_text_with_boxes(self, plate):
-        import cv2
-        import numpy as np
-
+    def _read_plate(self, plate: "np.ndarray") -> tuple["np.ndarray", str]:
         if plate.size == 0:
-            return [], None, ""
+            return plate.copy(), ""
 
-        resized_plate = cv2.resize(plate, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
-        debug_plate = resized_plate.copy()
-
+        resized = cv2.resize(plate, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+        debug_plate = resized.copy()
         ocr_results = self.ocr_reader.readtext(plate, detail=1)
         final_text = ""
-        char_predictions = []
 
         if not ocr_results:
-            return char_predictions, debug_plate, final_text
+            return debug_plate, final_text
 
-        # 1. YÜKSEKLİK (HEIGHT) FİLTRESİ: En büyük metin kutusunu bul
-        heights = [bbox[2][1] - bbox[0][1] for bbox, text, prob in ocr_results]
+        heights = [bbox[2][1] - bbox[0][1] for bbox, _, _ in ocr_results]
         max_h = max(heights) if heights else 0
 
-        for (bbox, text, prob) in ocr_results:
+        for bbox, text, _prob in ocr_results:
             h = bbox[2][1] - bbox[0][1]
-            
-            # Eğer kutu yüksekliği referans yüksekliğin %40'ından kısaysa bu alt yazıdır (galeri ismi vs), geç!
-            if h < max_h * 0.4:
+            if h < max_h * 0.4 or text.strip().upper() == "TR":
                 continue
-                
-            # Eğer okunan sadece 'TR' logonsuysa doğrudan ele!
-            if text.strip().upper() == 'TR':
+
+            cleaned = re.sub(r"[^A-Z0-9]", "", text.upper())
+            if not cleaned:
                 continue
 
             x_min = int(bbox[0][0] * 2)
@@ -246,96 +335,130 @@ class ALPRPipeline:
             x_max = int(bbox[2][0] * 2)
             y_max = int(bbox[2][1] * 2)
 
-            cleaned_text = re.sub(r'[^A-Z0-9]', '', text.upper())
-            if not cleaned_text:
-                continue
-
-            final_text += cleaned_text
-            char_predictions.append(CharacterPrediction((x_min, y_min, x_max, y_max), cleaned_text, float(prob)))
-
+            final_text += cleaned
             cv2.rectangle(debug_plate, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
-            
-            char_text_y = y_min - 6
-            if char_text_y < 20: 
-                char_text_y = y_max + 22 
-
+            char_y = y_min - 6 if y_min >= 26 else y_max + 22
             cv2.putText(
                 debug_plate,
-                cleaned_text,
-                (x_min, char_text_y),
+                cleaned,
+                (x_min, char_y),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
                 (0, 255, 0),
                 2,
             )
 
-        return char_predictions, debug_plate, final_text
+        return debug_plate, final_text
+
+
+def pump_gui() -> None:
+    try:
+        cv2.waitKey(1)
+    except cv2.error:
+        pass
+
+
+def read_exact(port, size: int, idle_timeout: float) -> bytes:
+    data = bytearray()
+    last_byte_at = time.monotonic()
+
+    while len(data) < size:
+        chunk = port.read(size - len(data))
+        if chunk:
+            data.extend(chunk)
+            last_byte_at = time.monotonic()
+        elif time.monotonic() - last_byte_at >= idle_timeout:
+            raise TimeoutError(f"UART read timed out after {len(data)} / {size} bytes")
+
+        pump_gui()
+
+    return bytes(data)
+
+
+def wait_for_magic_and_gui(port) -> None:
+    window = bytearray()
+    print("STM32'den SNAP frame bekleniyor...")
+
+    while True:
+        pump_gui()
+        byte = port.read(1)
+        if not byte:
+            continue
+
+        window += byte
+        if len(window) > len(MAGIC):
+            del window[0]
+        if bytes(window) == MAGIC:
+            return
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run YOLO .pt + EasyOCR ALPR Inference")
-    parser.add_argument("--input", default="alpr/images", help="Gorsel klasoru")
+    parser = argparse.ArgumentParser(description="Live STM32 AES SNAP ALPR inference")
+    parser.add_argument("--port", required=True, help="Seri port, ornek: /dev/ttyACM0 veya COM5")
+    parser.add_argument("-b", "--baud", type=int, default=115200, help="UART baudrate")
+    parser.add_argument("--timeout", type=float, default=5.0, help="Iki UART okuma arasindaki zaman asimi")
     parser.add_argument("--pt", default="yolov8_plaka.pt", help="YOLO .pt model yolu")
-    parser.add_argument("--sample", type=int, default=5, help="Rastgele resim adedi")
-    parser.add_argument("--seed", type=int, default=None, help="Random seed")
     parser.add_argument("--conf", type=float, default=0.25, help="YOLO guven esigi")
-    parser.add_argument("--output", default="alpr_results", help="Kayit klasoru")
-    parser.add_argument("--show", action="store_true", help="Canli pencereleri ac")
     return parser.parse_args()
-
-
-def normalize_turkish_plate(raw_text: str) -> tuple[str, bool]:
-    import re
-    # Harici karakterleri temizle
-    clean = re.sub(r"[^0-9A-Z]", "", raw_text.upper())
-    
-    # Bazen 'TR' harfleri plaka ile bitişik okunur (TR06DN4461 gibi), onları tıraşla
-    if clean.startswith("TR") and len(clean) > 2 and clean[2].isdigit():
-        clean = clean[2:]
-        
-    # 2. AKILLI REGEX: Tam Türk plakası formatını arar (01-81 İl, 1-3 Harf, 2-4 Rakam)
-    match = re.search(r"(0[1-9]|[1-7][0-9]|8[01])([A-Z]{1,3})([0-9]{2,4})", clean)
-    
-    if match:
-        # Eğer formata uyuyorsa sadece o jilet gibi kısmı al
-        return match.group(0), True
-        
-    return clean, False
 
 
 def main() -> int:
     args = parse_args()
     setup_runtime_environment(Path(".runtime_cache"))
-    input_path = Path(args.input)
-    output_dir = Path(args.output) if args.output else None
+    require_runtime_imports()
 
-    images = iter_images(input_path)
-    if not images:
-        print(f"Gorsel bulunamadi: {input_path}", file=sys.stderr)
-        return 2
+    import serial
 
-    rng = random.Random(args.seed)
-    if input_path.is_dir() and args.sample > 0 and len(images) > args.sample:
-        images = rng.sample(images, args.sample)
+    pipeline = LiveALPRPipeline(Path(args.pt), args.conf)
+    pipeline.show_idle()
 
-    pipeline = ALPRPipeline(
-        yolo_model_path=Path(args.pt),
-        detector_confidence=args.conf,
-    )
+    try:
+        with serial.Serial(args.port, args.baud, timeout=0.05) as port:
+            port.reset_input_buffer()
 
-    for image_path in images:
-        predictions = pipeline.process_image(image_path, output_dir, args.show)
-        if not predictions:
-            print(f"{image_path}: plaka bulunamadi")
-            continue
+            while True:
+                try:
+                    wait_for_magic_and_gui(port)
+                    header_raw = MAGIC + read_exact(port, HEADER_SIZE - len(MAGIC), args.timeout)
+                    header = parse_header(header_raw)
 
-        for index, prediction in enumerate(predictions, start=1):
-            status = "valid" if prediction.valid_plate else "invalid_format"
-            print(
-                f"{image_path} [{index}] conf={prediction.confidence:.3f} "
-                f"status={status} text='{prediction.text}'"
-            )
+                    aes_state = "AES-128-CTR" if header.flags & FLAG_AES128_CTR else "plain"
+                    print(
+                        f"Frame {header.frame_id}: {header.width}x{header.height}, "
+                        f"{header.payload_size} bytes, {aes_state}"
+                    )
+
+                    encrypted_payload = read_exact(port, header.payload_size, args.timeout)
+                    validate_payload(header, encrypted_payload)
+                    payload = decrypt_payload(header, encrypted_payload)
+
+                    rgb888 = rgb565_to_rgb888(payload)
+                    img_rgb = np.frombuffer(rgb888, dtype=np.uint8).reshape(
+                        (header.height, header.width, 3)
+                    )
+                    img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+
+                    print("Gorsel cozuldu; yapay zeka analiz ediyor...")
+                    plate = pipeline.process_frame(img_bgr)
+                    if plate:
+                        print(f"Okunan plaka: {plate}")
+
+                except TimeoutError:
+                    continue
+                except KeyboardInterrupt:
+                    print("\nCikis yapiliyor...")
+                    break
+                except Exception as exc:
+                    print(f"Hata: {exc}")
+                    port.reset_input_buffer()
+    finally:
+        try:
+            cv2.destroyAllWindows()
+        except cv2.error:
+            pass
+
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
