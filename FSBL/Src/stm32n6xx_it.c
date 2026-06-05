@@ -22,6 +22,7 @@
 #include "stm32n6xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "app_camera.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #ifdef SysTick_Handler
@@ -46,7 +47,6 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
-extern DCMIPP_HandleTypeDef hdcmipp;
 extern void xPortSysTickHandler(void);
 /* USER CODE END PV */
 
@@ -223,12 +223,12 @@ void SysTick_Handler(void)
 
 void CSI_IRQHandler(void)
 {
-  HAL_DCMIPP_CSI_IRQHandler(&hdcmipp);
+  HAL_DCMIPP_CSI_IRQHandler(AppCamera_GetDcmippHandle());
 }
 
 void DCMIPP_IRQHandler(void)
 {
-  HAL_DCMIPP_IRQHandler(&hdcmipp);
+  HAL_DCMIPP_IRQHandler(AppCamera_GetDcmippHandle());
 }
 
 /******************************************************************************/

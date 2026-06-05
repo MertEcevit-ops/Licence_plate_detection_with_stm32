@@ -8,6 +8,7 @@ from pathlib import Path
 from snapshot_protocol import (
     HEADER_SIZE,
     MAGIC,
+    decrypt_payload,
     parse_header,
     rgb565_to_rgb888,
     validate_payload,
@@ -81,6 +82,7 @@ def main():
         payload = read_exact(port, header.payload_size)
         validate_payload(header, payload)
 
+    payload = decrypt_payload(header, payload)
     rgb888 = rgb565_to_rgb888(payload)
     saved = save_image(rgb888, header.width, header.height, args.output)
     print(f"Saved {saved}")

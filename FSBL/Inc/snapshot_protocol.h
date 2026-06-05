@@ -13,7 +13,6 @@ extern "C" {
 #define SNAPSHOT_PROTOCOL_VERSION           2U
 #define SNAPSHOT_PROTOCOL_HEADER_SIZE       32U
 #define SNAPSHOT_PROTOCOL_PIXEL_FORMAT_RGB565 1U
-#define SNAPSHOT_PROTOCOL_FLAG_CRC32        0x01U
 #define SNAPSHOT_PROTOCOL_FLAG_AES128_CTR   0x02U
 
 typedef struct
@@ -26,10 +25,8 @@ typedef struct
   uint8_t Flags;
   uint32_t PayloadSize;
   uint32_t FrameId;
-  uint32_t PayloadCrc32;
 } SnapshotProtocol_FrameInfo_t;
 
-uint32_t SnapshotProtocol_Crc32(const uint8_t *Data, uint32_t Size);
 AppStatus_t SnapshotProtocol_BuildHeader(uint8_t *Header,
                                          uint32_t HeaderCapacity,
                                          const SnapshotProtocol_FrameInfo_t *Info);

@@ -51,10 +51,9 @@ AppStatus_t AppUartTransport_SendSnapshot(uint32_t FrameBufferAddress,
     info.BytesPerPixel = 2U;
     info.Decimation = (uint16_t)Decimation;
     info.PixelFormat = SNAPSHOT_PROTOCOL_PIXEL_FORMAT_RGB565;
-    info.Flags = SNAPSHOT_PROTOCOL_FLAG_CRC32 | SNAPSHOT_PROTOCOL_FLAG_AES128_CTR;
+    info.Flags = SNAPSHOT_PROTOCOL_FLAG_AES128_CTR;
     info.PayloadSize = payload_size;
     info.FrameId = UartFrameId++;
-    info.PayloadCrc32 = SnapshotProtocol_Crc32(frame, payload_size);
 
     status = SnapshotProtocol_BuildHeader(header, sizeof(header), &info);
   }
